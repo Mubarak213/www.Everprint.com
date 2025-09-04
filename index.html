@@ -30,8 +30,8 @@
   <script>
     // 🔧 CONFIG
     const SUPABASE_URL = 'https://lblruuemrevxqpohhxeq.supabase.co';
-    const SUPABASE_PUBLIC_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxibHJ1dWVtcmV2eHFwb2hoeGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYwMzM3MDUsImV4cCI6MjA3MTYwOTcwNX0.5h3JPaMOcW3eMcFv_jelNQgmPwJ0xpV5VoB2T6_UMwg'; // 🔐 Use anon key (not service role)
-    const RAZORPAY_KEY = 'rzp_test_R97CT8W0dJjd7g';     // Replace with your Razorpay test key
+    const SUPABASE_PUBLIC_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxibHJ1dWVtcmV2eHFwb2hoeGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYwMzM3MDUsImV4cCI6MjA3MTYwOTcwNX0.5h3JPaMOcW3eMcFv_jelNQgmPwJ0xpV5VoB2T6_UMwg'; // anon key
+    const RAZORPAY_KEY = 'rzp_test_R97CT8W0dJjd7g'; // Replace with your test/live Razorpay key
     const RATE_PER_PAGE = 10; // ₹ per page
 
     // 🔌 Supabase client
@@ -54,7 +54,7 @@
         try {
           const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(reader.result) }).promise;
           const pages = pdf.numPages;
-          const amount = pages * RATE_PER_PAGE * 100; // paise
+          const amount = pages * RATE_PER_PAGE * 100; // in paise
 
           // ✅ Razorpay Payment
           const options = {
@@ -65,7 +65,6 @@
             description: `${pages} pages to print`,
             handler: async function (response) {
               console.log("✅ Payment ID:", response.razorpay_payment_id);
-
               status.textContent = "Uploading file...";
 
               const path = `printjobs/${Date.now()}_${file.name}`;
@@ -82,10 +81,14 @@
                 return;
               }
 
-              // ✅ Add to `print_queue` table
+              // ✅ Insert into Supabase DB with payment info
               const { data: insertData, error: insertError } = await supabaseClient
                 .from('print_queue')
-                .insert([{ file_path: path }]);
+                .insert([{
+                  file_path: path,
+                  payment_id: response.razorpay_payment_id,
+                  paid_amount: amount / 100  // convert from paise to INR
+                }]);
 
               if (insertError) {
                 console.error("❌ DB Insert failed:", insertError.message);
@@ -95,6 +98,14 @@
 
               status.textContent = `✅ Uploaded and queued for printing (${pages} pages).`;
               console.log("📝 Inserted record:", insertData);
+            },
+            prefill: {
+              name: "",
+              email: "",
+              contact: ""
+            },
+            theme: {
+              color: "#3399cc"
             }
           };
 
