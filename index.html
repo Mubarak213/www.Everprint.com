@@ -1,45 +1,107 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Print Anywhere</title>
+  <title>Pay & Print</title>
+
+  <!-- Supabase Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+
+  <!-- Razorpay Checkout -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+  <!-- PDF.js for page count -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script>
+    const pdfjsLib = window['pdfjs-dist/build/pdf'];
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+  </script>
 </head>
+
 <body>
-  <h2>Ever Printer</h2>
+  <h2>Upload & Print PDF</h2>
+
   <form id="uploadForm">
-    <input type="file" id="file" name="file" required />
+    <input type="file" id="file" accept="application/pdf" required />
     <button type="submit">Upload & Print</button>
   </form>
 
   <p id="status"></p>
 
   <script>
+    const supabaseClient = supabase.createClient(
+      'https://lblruuemrevxqpohhxeq.supabase.co',
+      'your-public-anon-key' // never use service key in frontend
+    );
+
+    const RAZORPAY_API_KEY = 'rzp_test_R97CT8W0dJjd7g';
+    const RATE_PER_PAGE = 10;
+
     document.getElementById('uploadForm').addEventListener('submit', async function (e) {
       e.preventDefault();
-
-      const fileInput = document.getElementById('file');
-      const file = fileInput.files[0];
-      if (!file) return alert('Select a file first.');
-
-      const formData = new FormData();
-      formData.append('file', file);
-
+      const file = document.getElementById('file').files[0];
       const status = document.getElementById('status');
-      status.textContent = 'Uploading...';
 
-      try {
-        const response = await fetch('http://100.75.251.29:5000/upload', {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer mysecrettoken' // Same as in server.py
-          },
-          body: formData
-        });
-
-        const text = await response.text();
-        status.textContent = text;
-      } catch (err) {
-        status.textContent = 'Upload failed: ' + err;
+      if (!file || file.type !== 'application/pdf') {
+        alert('Select a valid PDF file.');
+        return;
       }
+
+      status.textContent = 'Calculating pages...';
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(reader.result) }).promise;
+          const pages = pdf.numPages;
+          const amount = pages * RATE_PER_PAGE * 100; // in paise
+
+          const options = {
+            key: RAZORPAY_API_KEY,
+            amount: amount,
+            currency: "INR",
+            name: "Ever Printer",
+            description: `${pages} pages to print`,
+            handler: async function (response) {
+              status.textContent = "Uploading to Supabase...";
+
+              const path = `printjobs/${Date.now()}_${file.name}`;
+
+              const { error } = await supabaseClient.storage
+                .from('print-jobs')
+                .upload(path, file, {
+                  contentType: 'application/pdf',
+                  upsert: true
+                });
+
+              if (error) {
+                console.error("Upload error:", error.message);
+                status.textContent = "Upload failed.";
+                return;
+              }
+
+              // ✅ Notify Flask server
+              const backendRes = await fetch('http://localhost:5000/upload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_path: path })
+              });
+
+              const result = await backendRes.json();
+              console.log("Backend response:", result);
+              status.textContent = result.message || result.error;
+            }
+          };
+
+          const rzp = new Razorpay(options);
+          rzp.open();
+
+        } catch (err) {
+          console.error("PDF read error:", err);
+          status.textContent = "Failed to read PDF.";
+        }
+      };
+
+      reader.readAsArrayBuffer(file);
     });
   </script>
 </body>
