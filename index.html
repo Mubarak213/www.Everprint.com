@@ -28,13 +28,14 @@
   <p id="status"></p>
 
   <script>
-    const supabaseClient = supabase.createClient(
-      'https://lblruuemrevxqpohhxeq.supabase.co',
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxibHJ1dWVtcmV2eHFwb2hoeGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYwMzM3MDUsImV4cCI6MjA3MTYwOTcwNX0.5h3JPaMOcW3eMcFv_jelNQgmPwJ0xpV5VoB2T6_UMwg' // never use service key in frontend
-    );
+    // 🔧 CONFIG
+    const SUPABASE_URL = 'https://lblruuemrevxqpohhxeq.supabase.co';
+    const SUPABASE_PUBLIC_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxibHJ1dWVtcmV2eHFwb2hoeGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYwMzM3MDUsImV4cCI6MjA3MTYwOTcwNX0.5h3JPaMOcW3eMcFv_jelNQgmPwJ0xpV5VoB2T6_UMwg'; // 🔐 Use anon key (not service role)
+    const RAZORPAY_KEY = 'rzp_test_R97CT8W0dJjd7g';     // Replace with your Razorpay test key
+    const RATE_PER_PAGE = 10; // ₹ per page
 
-    const RAZORPAY_API_KEY = 'rzp_test_R97CT8W0dJjd7g';
-    const RATE_PER_PAGE = 10;
+    // 🔌 Supabase client
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_PUBLIC_KEY);
 
     document.getElementById('uploadForm').addEventListener('submit', async function (e) {
       e.preventDefault();
@@ -46,49 +47,54 @@
         return;
       }
 
-      status.textContent = 'Calculating pages...';
+      status.textContent = 'Reading PDF...';
 
       const reader = new FileReader();
       reader.onload = async () => {
         try {
           const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(reader.result) }).promise;
           const pages = pdf.numPages;
-          const amount = pages * RATE_PER_PAGE * 100; // in paise
+          const amount = pages * RATE_PER_PAGE * 100; // paise
 
+          // ✅ Razorpay Payment
           const options = {
-            key: RAZORPAY_API_KEY,
+            key: RAZORPAY_KEY,
             amount: amount,
             currency: "INR",
             name: "Ever Printer",
             description: `${pages} pages to print`,
             handler: async function (response) {
-              status.textContent = "Uploading to Supabase...";
+              console.log("✅ Payment ID:", response.razorpay_payment_id);
+
+              status.textContent = "Uploading file...";
 
               const path = `printjobs/${Date.now()}_${file.name}`;
-
-              const { error } = await supabaseClient.storage
+              const { error: uploadError } = await supabaseClient.storage
                 .from('print-jobs')
                 .upload(path, file, {
                   contentType: 'application/pdf',
                   upsert: true
                 });
 
-              if (error) {
-                console.error("Upload error:", error.message);
-                status.textContent = "Upload failed.";
+              if (uploadError) {
+                console.error("❌ Upload failed:", uploadError.message);
+                status.textContent = "Upload failed: " + uploadError.message;
                 return;
               }
 
-              // ✅ Notify Flask server
-              const backendRes = await fetch('http://localhost:5000/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file_path: path })
-              });
+              // ✅ Add to `print_queue` table
+              const { data: insertData, error: insertError } = await supabaseClient
+                .from('print_queue')
+                .insert([{ file_path: path }]);
 
-              const result = await backendRes.json();
-              console.log("Backend response:", result);
-              status.textContent = result.message || result.error;
+              if (insertError) {
+                console.error("❌ DB Insert failed:", insertError.message);
+                status.textContent = "Database insert failed: " + insertError.message;
+                return;
+              }
+
+              status.textContent = `✅ Uploaded and queued for printing (${pages} pages).`;
+              console.log("📝 Inserted record:", insertData);
             }
           };
 
@@ -96,8 +102,8 @@
           rzp.open();
 
         } catch (err) {
-          console.error("PDF read error:", err);
-          status.textContent = "Failed to read PDF.";
+          console.error("❌ PDF error:", err);
+          status.textContent = "Failed to process PDF.";
         }
       };
 
@@ -106,4 +112,3 @@
   </script>
 </body>
 </html>
-
